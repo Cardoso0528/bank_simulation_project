@@ -9,216 +9,200 @@ import time
 import random
 from queue import Queue
 
-# Constants
-NUM_TELLERS = 3
-NUM_CUSTOMERS = 50
+#global constants per the project requirements
+num_tellers = 3
+num_customers = 50
 
-# Semaphores for shared resources
-door_semaphore = threading.Semaphore(2)  # Max 2 customers entering at once
-manager_semaphore = threading.Semaphore(1)  # Max 1 teller with manager
-safe_semaphore = threading.Semaphore(2)  # Max 2 tellers in safe
+#semaphores to determine the numbers of customers and tellers that can be in the bank at once
+door_sem = threading.Semaphore(2)
+manager_sem = threading.Semaphore(1)
+safe_sem = threading.Semaphore(2)
 
-# Synchronization primitives
-bank_open = threading.Event()  # Signals when bank is open
-print_lock = threading.Lock()  # For thread-safe printing
+#synchronization to ensure the correct order of events
+bank_open = threading.Event()  
+print_lock = threading.Lock()  # to make sure we print the events in the correct order
 teller_ready_lock = threading.Lock()
 teller_ready_count = 0
 
-# Customer-teller communication
-# Dictionary to store events and teller ID for each customer
+# dictionary to store events and teller ID for each customer
 customer_events = {}
-customer_teller_map = {}  # Maps customer_id to teller_id
+customer_teller_map = {}
 
-# Queue for customers waiting to be served
+# the line for customers to wait in
 customer_queue = Queue()
 
-# Counter for customers served
+# counter to keep track of the number of customers served
 customers_served_lock = threading.Lock()
 customers_served = 0
 
-
+# function to print the events in the correct order
 def print_log(thread_type, thread_id, other_type=None, other_id=None, message=""):
-    """
-    Thread-safe logging function.
-    Format: THREAD_TYPE ID [THREAD_TYPE ID]: MSG
-    """
     with print_lock:
         if other_type and other_id is not None:
             print(f"{thread_type} {thread_id} [{other_type} {other_id}]: {message}")
         else:
             print(f"{thread_type} {thread_id}: {message}")
 
-
+# teller thread function
 def teller_thread(teller_id):
-    """
-    Teller thread function.
-    Each teller serves customers until all are served.
-    """
     global teller_ready_count, customers_served
     
-    # Step 1: Signal ready
+    # signal the teller is ready to serve
     with teller_ready_lock:
         teller_ready_count += 1
         print_log("Teller", teller_id, message="ready to serve")
-        if teller_ready_count == NUM_TELLERS:
+        if teller_ready_count == num_tellers:
             bank_open.set()
     
-    # Step 2: Loop until all customers served
+    # loop until all customers have been served
     while True:
-        # Check if all customers have been served
         with customers_served_lock:
-            if customers_served >= NUM_CUSTOMERS:
+            if customers_served >= num_customers:
                 break
         
-        # Wait for a customer to approach (blocking get from queue)
+        # wait for a customer to approach the teller
         try:
             customer_id = customer_queue.get(timeout=0.5)
         except:
             continue
         
-        # Store which teller is serving this customer
+        # store which teller is serving this customer
         customer_teller_map[customer_id] = teller_id
         
-        # Customer has approached - get their events
+        # get the events for the customer
         events = customer_events[customer_id]
         
-        # Signal customer we're ready and ask for transaction
+        # signal the customer is ready to give a transaction
         events['teller_ready'].set()
         print_log("Teller", teller_id, "Customer", customer_id, "asks for transaction")
         
-        # Wait for customer to provide transaction
+        # wait for the customer to provide a transaction
         events['transaction_given'].wait()
         events['transaction_given'].clear()
         
-        transaction_type = events['transaction_type']
+        trans_type = events['transaction_type']
         
-        # If withdrawal, go to manager
-        if transaction_type == "WITHDRAWAL":
+        # if the transaction is a withdrawal, go to the manager
+        if trans_type == "WITHDRAWAL":
             print_log("Teller", teller_id, "Customer", customer_id, "goes to the manager for permission")
-            manager_semaphore.acquire()
+            manager_sem.acquire()
             print_log("Teller", teller_id, "Customer", customer_id, "getting permission from manager")
-            time.sleep(random.uniform(0.005, 0.030))  # 5-30ms
+            time.sleep(random.uniform(0.005, 0.030))
             print_log("Teller", teller_id, "Customer", customer_id, "got permission from manager")
-            manager_semaphore.release()
+            manager_sem.release()
         
-        # Go to safe
+        # go to the safe
         print_log("Teller", teller_id, "Customer", customer_id, "goes to the safe")
-        safe_semaphore.acquire()
+        safe_sem.acquire()
         print_log("Teller", teller_id, "Customer", customer_id, "enters safe")
-        time.sleep(random.uniform(0.010, 0.050))  # 10-50ms
-        print_log("Teller", teller_id, "Customer", customer_id, f"completes {transaction_type.lower()} in safe")
+        time.sleep(random.uniform(0.010, 0.050))
+        print_log("Teller", teller_id, "Customer", customer_id, f"completes {trans_type.lower()} in safe")
         print_log("Teller", teller_id, "Customer", customer_id, "leaves safe")
-        safe_semaphore.release()
+        safe_sem.release()
         
-        # Inform customer transaction is complete
+        # inform the customer that the transaction is complete
         print_log("Teller", teller_id, "Customer", customer_id, "informs customer transaction is complete")
         events['transaction_complete'].set()
         
-        # Wait for customer to leave
+        # wait for the customer to leave
         events['customer_left'].wait()
         events['customer_left'].clear()
 
 
 def customer_thread(customer_id):
-    """
-    Customer thread function.
-    Each customer performs one transaction and leaves.
-    """
     global customers_served
     
-    # Step 1: Decide transaction type
-    transaction_type = random.choice(["DEPOSIT", "WITHDRAWAL"])
-    print_log("Customer", customer_id, message=f"decides to make a {transaction_type.lower()}")
+    # decide the transaction type
+    trans_type = random.choice(["DEPOSIT", "WITHDRAWAL"])
+    print_log("Customer", customer_id, message=f"decides to make a {trans_type.lower()}")
     
-    # Step 2: Wait random time (0-100ms)
+    # wait for a random time (0-100ms)
     wait_time = random.uniform(0, 0.100)
     time.sleep(wait_time)
     
-    # Wait for bank to open
+    # wait for the bank to open
     bank_open.wait()
     
-    # Step 3: Enter bank (door allows max 2)
-    door_semaphore.acquire()
+    # enter the bank (door allows max 2)
+    door_sem.acquire()
     print_log("Customer", customer_id, message="enters bank through door")
-    door_semaphore.release()
+    door_sem.release()
     
-    # Step 4: Get in line
+    # get in line
     print_log("Customer", customer_id, message="gets in line")
     
-    # Create events for this customer
+    # create events for this customer
     customer_events[customer_id] = {
         'teller_ready': threading.Event(),
         'transaction_given': threading.Event(),
         'transaction_complete': threading.Event(),
         'customer_left': threading.Event(),
-        'transaction_type': transaction_type
+        'transaction_type': trans_type
     }
     
-    # Put self in customer queue
+    # put the customer in the customer queue
     customer_queue.put(customer_id)
     
-    # Wait for a teller to be ready
+    # wait for a teller to be ready
     customer_events[customer_id]['teller_ready'].wait()
     customer_events[customer_id]['teller_ready'].clear()
     
-    # Get the teller ID assigned to this customer
+    # get the teller ID assigned to the customer
     teller_id = customer_teller_map[customer_id]
     
-    # Step 5: Introduce self to teller
+    # introduce the customer to the teller
     print_log("Customer", customer_id, "Teller", teller_id, "goes to teller")
-    print_log("Customer", customer_id, "Teller", teller_id, f"introduces self and requests {transaction_type.lower()}")
+    print_log("Customer", customer_id, "Teller", teller_id, f"introduces self and requests {trans_type.lower()}")
     customer_events[customer_id]['transaction_given'].set()
     
-    # Step 8: Wait for transaction to complete
+    # wait for the transaction to complete
     customer_events[customer_id]['transaction_complete'].wait()
     customer_events[customer_id]['transaction_complete'].clear()
     
-    # Step 9: Leave teller and bank
+    # leave the teller and bank
     print_log("Customer", customer_id, "Teller", teller_id, "thanks teller and leaves")
     customer_events[customer_id]['customer_left'].set()
     
     print_log("Customer", customer_id, message="leaves bank through door")
     
-    # Increment customers served
+    # increment the number of customers served
     with customers_served_lock:
         customers_served += 1
 
 
+# main function to initialize and run the simulation
 def main():
-    """
-    Main function to initialize and run the simulation.
-    """
     print("Bank Simulation Starting...")
-    print(f"Opening bank with {NUM_TELLERS} tellers and {NUM_CUSTOMERS} customers\n")
+    print(f"Opening bank with {num_tellers} tellers and {num_customers} customers\n")
     
-    # Create and start teller threads
+    # create and start teller threads
     teller_threads = []
-    for i in range(NUM_TELLERS):
+    for i in range(num_tellers):
         t = threading.Thread(target=teller_thread, args=(i,))
         t.start()
         teller_threads.append(t)
     
-    # Wait for bank to open
+    # wait for the bank to open
     bank_open.wait()
-    print("\n--- Bank is now OPEN ---\n")
+    print("\nBank is now open\n")
     
-    # Create and start customer threads
+    # create and start customer threads
     customer_threads = []
-    for i in range(NUM_CUSTOMERS):
+    for i in range(num_customers):
         t = threading.Thread(target=customer_thread, args=(i,))
         t.start()
         customer_threads.append(t)
     
-    # Wait for all customers to finish
+    # wait for all customers to finish
     for t in customer_threads:
         t.join()
     
-    # Wait for all tellers to finish
+    # wait for all tellers to finish
     for t in teller_threads:
         t.join()
     
-    print("\n--- Bank is now CLOSED ---")
-    print(f"All {NUM_CUSTOMERS} customers have been served.")
+    print("\nBank is now closed")
+    print(f"All {num_customers} customers have been served.")
 
 
 if __name__ == "__main__":

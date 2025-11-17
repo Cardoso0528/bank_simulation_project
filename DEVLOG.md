@@ -133,7 +133,7 @@ i was checking before all customers had a chance to get in line. Added a small t
 try-except to handle empty queue. Also moved the exit check to only happen when queue is actually empty.
 
 
-November 16, 7:49PM
+November 16, 7:39PM
 
 Final Session complete.
 I fixed the output message structure to match the example given, and wrote the read me file.
