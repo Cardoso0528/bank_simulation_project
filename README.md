@@ -1,4 +1,4 @@
-# Bank/Teller Simulation - OS Project 2
+# Bank Simulation - OS Project 2
 
 A multi-threaded simulation of a bank with tellers and customers using Python's threading module and semaphores for synchronization.
 
